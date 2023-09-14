@@ -10,118 +10,182 @@ import streamlit as st
 
 from streamlit_jupyter import StreamlitPatcher, tqdm
 
+
+
+import numpy as np
 import os
 import pandas as pd
+import scipy.stats
 import seaborn as sns
-import streamlit as st
-import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer
 import matplotlib.pyplot as plt
-from scipy.sparse import csr_matrix
-from sklearn.neighbors import NearestNeighbors
+import streamlit as st
 
-
-# Get dataset
+### Get dataset
 my_path_books = os.path.join(os.getcwd(), "dataset", "books.csv")
 data_books = pd.read_csv(my_path_books, low_memory=False)
+
+display(data_books.head())
+
+data_books.info()
 
 my_path_ratings = os.path.join(os.getcwd(), "dataset", "ratings.csv")
 data_ratings = pd.read_csv(my_path_ratings, low_memory=False)
 
+display(data_ratings.head())
+
+data_ratings.info()
+
 my_path_to_read = os.path.join(os.getcwd(), "dataset", "to_read.csv")
 data_to_read = pd.read_csv(my_path_to_read, low_memory=False)
 
-# Drop non-related values
-combine_book_rating = pd.merge(data_ratings, data_books, on="book_id")
-combine_book_rating = combine_book_rating.dropna(axis=0, subset=['title'])
+display(data_to_read.head())
+
+bookID_merged = pd.merge(data_ratings, data_books, on="book_id")
+bookID_merged.head(10)
+
+### Drop non-related values
+combine_book_rating = bookID_merged.dropna(axis=0, subset=['title'])
 combine_book_rating = combine_book_rating.drop_duplicates(subset=['title', 'user_id'])
 
-book_ratingCount = (combine_book_rating.groupby(by=['title'])['rating']
-                    .count()
-                    .reset_index()
-                    .rename(columns={'rating': 'totalRatingCount'})
-                    [['title', 'totalRatingCount']]
-                    )
+book_ratingCount = (combine_book_rating.
+     groupby(by=['title'])['rating'].
+     count().
+     reset_index().
+     rename(columns={'rating': 'totalRatingCount'})
+     [['title', 'totalRatingCount']]
+)
 
-book_ratingCount = pd.merge(book_ratingCount, combine_book_rating[["title", "authors", "image_url", "small_image_url"]], on='title', how='left')
+book_ratingCount = pd.merge(book_ratingCount, bookID_merged[["title", "authors", "image_url", "small_image_url"]], on='title', how='left')
 book_ratingCount = book_ratingCount.drop_duplicates(subset=['title']).reset_index(drop=True)
 
-# Save the data to a CSV file
 book_ratingCount.to_csv(r'C:\Users\Admin\Desktop\Collaborative Filtering Recommender System\collab.csv')
 
-# Visualization
-st.title("Book Recommendation System")
+book_ratingCount.head()
 
-st.subheader("Boxplot of Ratings Count")
-st.box_plot(data_books['ratings_count'])
+rating_with_totalRatingCount = combine_book_rating.merge(book_ratingCount, left_on = 'title', right_on = 'title', how = 'left')
+rating_with_totalRatingCount.head()
 
-st.subheader("Countplot of Ratings")
-sns_countplot = sns.countplot(x="rating", data=data_ratings)
-st.pyplot(sns_countplot.figure)
+rating_with_totalRatingCount.info()
 
-st.subheader("Explicit Ratings")
+pd.set_option('display.float_format', lambda x: '%.3f' % x)
+print(book_ratingCount['totalRatingCount'].describe())
+
+### Visualization
+#Boxplot 
+plt.boxplot(data_books['ratings_count'])
+
+plt.figure(figsize=(8,6))
+sns.countplot(x="rating", data=data_ratings)
+
+## Explicit Ratings
+plt.figure(figsize=(8,6))
 data = data_ratings[data_ratings['rating'] != 0]
-sns_countplot_explicit = sns.countplot(x="rating", data=data)
+sns.countplot(x="rating", data=data)
 plt.title("Explicit Ratings")
-st.pyplot(sns_countplot_explicit.figure)
 
-# Only considering books with >= 50 ratings
+#only considering books with >= 50 ratings
 popularity_threshold = 50
 
-rating_popular_books = combine_book_rating.query('totalRatingCount >= @popularity_threshold')
+rating_popular_books= rating_with_totalRatingCount.query('totalRatingCount >= @popularity_threshold')
+rating_popular_books.head()
 
-st.subheader("Top Popular Books")
-st.dataframe(rating_popular_books.sort_values(by='totalRatingCount', ascending=False).head())
+rating_popular_books.sort_values(by='totalRatingCount', ascending=False).head()
 
-# User-Item Matrix
-st.subheader("User-Item Matrix")
-books_features_df = rating_popular_books.pivot_table(index='title', columns='user_id', values='rating').fillna(0)
-st.dataframe(books_features_df.head())
+rating_popular_books.shape
 
-# Data normalization
-st.subheader("Data Normalization")
-books_features_norm_df = books_features_df.subtract(books_features_df.mean(axis=1), axis='rows')
-st.dataframe(books_features_norm_df.head())
+### User-Item Matrix
 
-# Import K-Nearest Neighbour
-st.subheader("K-Nearest Neighbors Model")
+## Create user-item matrix
+books_features_df = rating_popular_books.pivot_table(index='title',columns='user_id',values='rating').fillna(0)
+books_features_df.head()
+
+### Data normalization
+books_features_norm_df = books_features_df.subtract(books_features_df.mean(axis = 1), axis = 'rows')
+books_features_norm_df.head()
+
+### Import K-Nearest Neighbour
+from scipy.sparse import csr_matrix
 books_features_df_matrix = csr_matrix(books_features_norm_df.values)
 
-model_knn = NearestNeighbors(metric='cosine', algorithm='brute')
+from sklearn.neighbors import NearestNeighbors
+model_knn = NearestNeighbors(metric = 'cosine', algorithm = 'brute')
 model_knn.fit(books_features_df_matrix)
 
-# Collaborative Filtering using K-Nearest Neighbours
-st.subheader("Recommend Books Based on User Input")
-input_recommendation_amount = st.number_input("Enter the number of books you want for recommendation:", min_value=1, step=1)
+books_features_df_matrix.shape
 
-input_recommendation_book = st.text_input("Enter books you have read:")
+### Recommend books for the user based on user input by Collaborative Filtering using K-Nearest Neighbours 
 
-if st.button("Get Recommendations"):
+def recommend():
+    while True:
+        try:
+            input_recommendation_amount = int(input("Please amount of books you want for recommendation: "))
+            if input_recommendation_amount:
+                break
+            else:
+                print("You must enter something!")
+                break
+        except ValueError:
+            print("Invalid input! Please enter an integer.")
     n_neighbors = input_recommendation_amount + 1
-
+    
+    # Request book from user
+    while True:
+        input_recommendation_book = input('Enter books you have read: ')
+        if input_recommendation_book:
+            break
+        else:
+            print("You must enter something!")
+    
+    # fetch index
     query_index = np.where(books_features_norm_df.index == input_recommendation_book)[0][0]
-    distances, indices = model_knn.kneighbors(books_features_norm_df.iloc[query_index, :].values.reshape(1, -1), n_neighbors)
-
+    # check index and name
+    #print(query_index, book_name)
+    distances, indices = model_knn.kneighbors(books_features_norm_df.
+                                              iloc[query_index,:].
+                                              values.reshape(1, -1), 
+                                              n_neighbors)
+    
+    # get recommendation    
     recommendations = []
     for i in range(1, len(distances.flatten())):
         book_index = indices.flatten()[i]
         book_title = books_features_norm_df.index[book_index]
         recommendations.append((i, book_index, book_title))
-
+    
     recommendations_df = pd.DataFrame(recommendations, columns=["#", "Index", "Book Title"])
     recommendations_df.set_index("#", inplace=True)
-    st.subheader(f"Recommendations for {input_recommendation_book}:")
-    st.dataframe(recommendations_df)
+    print("Recommendations for {}:\n".format(books_features_norm_df.index[query_index]))
+    print(recommendations_df)
 
-# Recommend a random book for the user by Collaborative Filtering using K-Nearest Neighbours
-st.subheader("Recommend a Random Book")
-input_recommendation_amount_random = st.number_input("Enter the number of books you want for recommendation:", min_value=1, step=1)
 
-if st.button("Get Random Recommendations"):
-    n_neighbors = input_recommendation_amount_random + 1
+### Recommend a random book for the user by Collaborative Filtering using K-Nearest Neighbours 
+def recommend_random():
+    # Request recommendation amount from user
+    while True:
+        try:
+            input_recommendation_amount = int(input("Please amount of books you want for recommendation: "))
+            if input_recommendation_amount:
+                break
+            else:
+                print("You must enter something!")
+            break
+        except ValueError:
+            print("Invalid input! Please enter an integer.")
 
+    n_neighbors = input_recommendation_amount + 1
+    
+    # fetch random query
     query_index = np.random.choice(books_features_norm_df.shape[0])
-    distances, indices = model_knn.kneighbors(books_features_norm_df.iloc[query_index, :].values.reshape(1, -1), n_neighbors)
-
+    #print(query_index, books_features_norm_df.index[query_index])
+    distances, indices = model_knn.kneighbors(books_features_norm_df.
+                                              iloc[query_index,:].
+                                              values.reshape(1, -1), 
+                                              n_neighbors)
+    
+    # get recommendation
     recommendations = []
     result_index = []
     for i in range(1, len(distances.flatten())):
@@ -129,8 +193,13 @@ if st.button("Get Random Recommendations"):
         book_title = books_features_norm_df.index[book_index]
         result_index.append(book_index)
         recommendations.append((i, book_index, book_title))
-
+    
     recommendations_df = pd.DataFrame(recommendations, columns=["#", "Index", "Book Title"])
     recommendations_df.set_index("#", inplace=True)
-    st.subheader(f"Random Recommendations for {books_features_norm_df.index[query_index]}:")
-    st.dataframe(recommendations_df)
+    print("Recommendations for {}:\n".format(books_features_norm_df.index[query_index]))
+    print(recommendations_df)
+    return result_index
+
+recommend()
+
+recommend_random()
